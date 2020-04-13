@@ -1,0 +1,71 @@
+{
+  "fields": [
+    {
+      "name" : "file",
+      "type" : "file",
+      "label" : "Datei (Video/Audio)",
+      "title" : "Das Video/Audio zum Hochladen."
+    },
+    {
+      "name" : "project",
+      "label" : "Projekt",
+      "title" : "Projekt, zu dem du beitragen möchtest"
+    },
+    {
+      "name" : "name",
+      "label" : "Name",
+      "title" : "Dein Name"
+    },
+    {
+      "name" : "type",
+      "type" : "select",
+      "label" : "Typ",
+      "title" : "Stimme oder Dirigat",
+      "value" : "voice",
+      "values" : [
+        ["voice","Stimme","eine Stimme"],
+        ["conductor","Dirigat","Ein Dirigat und/oder Metronom"]
+      ]
+    },
+    {
+      "name" : "voice",
+      "label" : "Stimme",
+      "title" : "Die vorgetragene Stimme im mehrstimmigen Stück"
+    },
+    {
+      "name" : "instrument",
+      "label" : "Instrument",
+      "title" : "Das Instrument des Sängers ist die \"Stimme\""
+    },
+    {
+      "name" : "license",
+      "type" : "select",
+      "label" : "Lizenz",
+      "title" : "Welche Weitergabe erlaubt ist",
+      "value" : "private",
+      "values" : [
+        ["private","privat - nur innerhalb der Gruppe",""],
+        ["CC BY 3.0 DE","CC BY 3.0 DE - Creative Commons Attribution","Namensnennung"],
+        ["CC BY-SA 3.0 DE","CC BY-SA 3.0 DE - Creative Commons Attribution-ShareAlike","Namensnennung - Weitergabe unter gleichen Bedingungen"],
+        ["CC BY-NC 3.0 DE","CC BY-NC 3.0 DE - Creative Commons Attribution-NonCommercial","Namensnennung - Nicht-kommerziell"],
+        ["CC BY-NC-SA 3.0 DE","CC BY-NC-SA 3.0 DE - Creative Commons Attribution-NonCommercial-ShareAlike","Namensnennung - Nicht-kommerziell - Weitergabe unter gleichen Bedingungen"],
+        ["publicdomain","gemeinfrei - keine Schöpfungshöhe","z.B. automatisch generierter Metronomtrack"]
+      ]
+    },
+    {
+      "name" : "syncmode",
+      "type" : "select",
+      "value" : "twoclap",
+      "label" : "Synchronisation",
+      "title" : "Der genutzte Synchronisationsmodus",
+      "values" : [
+        ["twoclap","2 claps","Zwei Klatscher zwischen Sekunde 1 und Sekunde 10, der zweite ist der relevante."],
+        ["oneclap","1 clap","Ein Klatscher zwischen Sekunde 1 und Sekunde 10"],
+        ["trackstart","Track start","Der Synchronisationspuls wird am Beginn der Aufnahme angenommen."],
+        ["none","none","Diesem Dirigat sollen automatisch Synchronisationsklatscher vorangestellt werden. (noch nicht implementiert)"]
+      ]
+    }
+  ],
+  "filename" : "projects/xyzzy/%{project}/%{type}-%{voice}-%{instrument}-%{name}.syncjson",
+  "mkdir" : true
+}

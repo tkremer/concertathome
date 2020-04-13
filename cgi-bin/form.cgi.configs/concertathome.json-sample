@@ -1,0 +1,71 @@
+{
+  "fields": [
+    {
+      "name" : "file",
+      "type" : "file",
+      "label" : "file",
+      "title" : "The File to upload."
+    },
+    {
+      "name" : "project",
+      "label" : "Project",
+      "title" : "Project to contribute to"
+    },
+    {
+      "name" : "name",
+      "label" : "Name",
+      "title" : "Your Name"
+    },
+    {
+      "name" : "type",
+      "type" : "select",
+      "label" : "Typ",
+      "title" : "\"voice\" or \"conductor\"",
+      "value" : "voice",
+      "values" : [
+        ["voice","Voice","a simple voice"],
+        ["conductor","Conductor","The conductor or metronome track"]
+      ]
+    },
+    {
+      "name" : "voice",
+      "label" : "Voice",
+      "title" : "The voice you are playing"
+    },
+    {
+      "name" : "instrument",
+      "label" : "Instrument",
+      "title" : "The instrument of a singer is the \"voice\""
+    },
+    {
+      "name" : "license",
+      "type" : "select",
+      "label" : "License",
+      "title" : "How may we publish your voice?",
+      "value" : "private",
+      "values" : [
+        ["private","private - only within the group",""],
+        ["CC BY 3.0 DE","CC BY 3.0 DE - Creative Commons Attribution","Attribution"],
+        ["CC BY-SA 3.0 DE","CC BY-SA 3.0 DE - Creative Commons Attribution-ShareAlike","Attribution - Share-Alike"],
+        ["CC BY-NC 3.0 DE","CC BY-NC 3.0 DE - Creative Commons Attribution-NonCommercial","Attribution - Non-commercial"],
+        ["CC BY-NC-SA 3.0 DE","CC BY-NC-SA 3.0 DE - Creative Commons Attribution-NonCommercial-ShareAlike","Attribution - Non-commercial - Share-Alike"],
+        ["publicdomain","public domain - doesn't meet the threshold of originality","e.g. an automatic metronome track"],
+      ]
+    },
+    {
+      "name" : "syncmode",
+      "type" : "select",
+      "value" : "twoclap",
+      "label" : "Synchronisation",
+      "title" : "The synchronisation mode used",
+      "values" : [
+        ["twoclap","2 claps","two claps between second 1 and second 10, the second clap is the relevant one."],
+        ["oneclap","1 clap","one clap between second 1 and second 10"],
+        ["trackstart","Track start","The track comes pre-cut, the sync beat is assumed to be at the track start."],
+        ["none","none","automatic claps may be added to conductor tracks in the future."]
+      ]
+    }
+  ],
+  "filename" : "xyzzy/%{project}/%{type}-%{voice}-%{instrument}-%{name}.syncjson",
+  "mkdir" : true
+}

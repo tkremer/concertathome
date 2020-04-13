@@ -1,0 +1,8 @@
+color=ffaa33ff:size=8x750:rate=200:duration=2,
+rotate=sin((t+0.5)*PI)^8*PI/2+PI/4:ow=800:fillcolor=00000000,
+split=2[left][left2];
+[left2]hflip[right];
+color=000000ff:size=800x600:rate=200:duration=2[base];
+[base][left]overlay=-400:-75[base2];
+[base2][right]overlay=400:-75[out]
+

@@ -1,0 +1,7 @@
+{
+  "frames" : 400,
+  "audio_channels" : 1,
+  "audio_offset" : 1,
+  "sample_rate" : 48000,
+  "sample_format" : "s16le"
+}

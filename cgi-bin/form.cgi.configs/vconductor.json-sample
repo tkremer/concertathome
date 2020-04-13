@@ -1,0 +1,42 @@
+{
+  "fields": [
+    {
+      "name" : "project",
+      "label" : "Project",
+      "title" : "Project to contribute to"
+    },
+    {
+      "name" : "bpm",
+      "label" : "beats/minute",
+      "title" : "The speed of the music.",
+      "value" : 60
+    },
+    {
+      "name" : "beats",
+      "label" : "Beats",
+      "title" : "Total number of beats",
+      "value" : 60
+    },
+    {
+      "name" : "starttime",
+      "label" : "Seconds before start",
+      "title" : "Time before first beat in seconds",
+      "value" : 5
+    },
+    {
+      "name" : "syncmode",
+      "type" : "select",
+      "value" : "twoclap",
+      "label" : "Synchronisation",
+      "title" : "The synchronisation mode used",
+      "values" : [
+        ["twoclap","2 claps","two claps at t=1.5 and t=2.5, the second clap is the relevant one."],
+        ["oneclap","1 clap","one clap at t=1.5"],
+        ["trackstart","Track start","No claps. The sync beat is assumed to be at the track start."],
+        ["none","none","No claps."]
+      ]
+    }
+  ],
+  "filename" : "xyzzy/%{project}/conductor-%{bpm}-%{beats}.vconductor",
+  "mkdir" : true
+}
