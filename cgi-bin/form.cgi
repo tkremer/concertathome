@@ -225,7 +225,7 @@ sub num2hr {
   #$num *= 1000**(-$i);
   my $prefix = (qw(ai fi pi ni ui mi),"",qw(ki Mi Gi Ti Pi))[$i+6];
   $num *= 1024**(-$i);
-  return sprintf "%.3g%s",$num,$prefix;
+  return sprintf "%.3g %s",$num,$prefix;
 }
 
 sub time2hr {
@@ -235,9 +235,21 @@ sub time2hr {
 }
 
 my $dirlisting_defaulttemplates = {
-  page => qq(<html><head><meta http-equiv="content-type: text/html; charset=UTF-8"><title>%{dirname}</title></head><body><h1>%{dirname}/</h1>\n<table style="font-family: monospace; border: 0; border-collapse: collapse;">%{entries}</table></body></html>\n),
-  file => qq(<tr><td>%{modeHR}</td><td>%{sizeHR}</td><td>%{mtimeHR}</td><td><a href="%{link}">%{filename}</a></p>\n),
-  dir => qq(<tr><td>%{modeHR}</td><td>%{sizeHR}</td><td>%{mtimeHR}</td><td><a href="%{link}/">%{filename}/</a></p>\n),
+  page => <<EOHTML,
+<html><head><meta http-equiv="content-type: text/html; charset=UTF-8">
+  <title>%{dirname}</title>
+  <style>
+    td { padding: 0em 0.5em; }
+    td.size { text-align: right; }
+    table { font-family: monospace; border: 0; border-collapse: collapse; }
+  </style>
+</head><body><h1>%{dirname}/</h1>
+<table>
+%{entries}</table></body></html>
+EOHTML
+  file => qq(<tr><td>%{modeHR}</td><td class="size">%{sizeHR}</td><td>%{mtimeHR}</td><td><a href="%{link}">%{filename}</a></p>\n),
+  dir => qq(<tr><td>%{modeHR}</td><td class="size">%{sizeHR}</td><td>%{mtimeHR}</td><td>%{filename}/</p>\n),
+  #dir => qq(<tr><td>%{modeHR}</td><td>%{sizeHR}</td><td>%{mtimeHR}</td><td><a href="%{link}/">%{filename}/</a></p>\n),
 };
 
 sub create_dirlisting {
