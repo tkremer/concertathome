@@ -262,7 +262,7 @@ sub create_dirlisting {
     my @stat = stat($prefix.$_);
     my $isdir = S_ISDIR($stat[2]);
     @$templdata{qw(filename dirslash mode modeHR size sizeMiB sizeHR mtime mtimeISO ctime ctimeISO)} =
-    (escapeHTML($_), $isdir ? "/" : "", sprintf("%04o",S_IMODE($stat[2])), filemode2hr($stat[2]), $stat[7], $stat[7]>>20, num2hr($stat[7])."B", $stat[9], time2hr($stat[9]), $stat[10], time2iso($stat[10]));
+    (escapeHTML($_), $isdir ? "/" : "", sprintf("%04o",S_IMODE($stat[2])), filemode2hr($stat[2]), $stat[7], $stat[7]>>20, num2hr($stat[7])."B", $stat[9], time2hr($stat[9]), $stat[10], time2hr($stat[10]));
     my $templ = $templates->{$isdir ? "dir" : "file"};
     $_ = template_fill($templ,$templdata);
   }
@@ -357,7 +357,7 @@ sub cgi_process_request {
       for (@files) {
         my ($name,$handle) = @$_;
         my $clientfname = $data{$name};
-        my $ext = $clientfname =~ m{\.([^/.])$} ? sanitize_filename($1) : "";
+        my $ext = $clientfname =~ m{\.([^/.])+$} ? sanitize_filename($1) : "";
            #sanitize_filename($clientfname =~ s/^.*\.//rs);
         my $target = $dname."/".$name.".".$ext;
         $data{$name} = $dname_rel."/".$name.".".$ext;
@@ -372,7 +372,7 @@ sub cgi_process_request {
       if (defined $link) {
         $link = template_fill($link,\%templdata);
         # FIXME: urlencode
-        $msg .= escapeHTML("<a href=\"$link\">See here</a>")."<br/>\n";
+        $msg .= "<a href=\"".escapeHTML($link)."\">See here</a><br/>\n";
       }
       if ($cfg->{dirlisting}) {
         my $rec = ($cfg->{dirlisting} eq "recursive");
