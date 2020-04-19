@@ -199,11 +199,14 @@ sub store_file {
 
 sub filemode2hr {
   my $mode = shift;
-  my $acl = printf "%012b", $mode & 07777;
+  my $aclbin = sprintf "%012b", $mode & 07777;
     # we hardcode S_IMODE(x) == (x & 07777) here for good reasons.
-  $acl =~ y/01/\0\xff/;
-  $acl = ("$acl" & "tssrwxrwxrwx") | (~"$acl" & "------------");
-  # ignore suid/sticky. TODO: do we need them in any way?
+  $aclbin =~ y/01/\0\xff/;
+  my $acl = ~"$aclbin";
+  $acl = "$acl" & "------------";
+  $acl = "$acl" | ("$aclbin" & "sstrwxrwxrwx");
+  #$acl = ("$acl" & "tssrwxrwxrwx") | (~"$acl" & "------------");
+  # ignore suid/sgid/sticky. TODO: do we need them in any way?
   $acl = substr($acl,3);
   my $type = { S_IFREG, "-", S_IFDIR, "d", S_IFLNK, "l", S_IFBLK, "b", S_IFCHR, "c", S_IFIFO, "p", S_IFSOCK, "s" }->{S_IFMT($mode)};
   $type //= "?";
@@ -232,9 +235,9 @@ sub time2hr {
 }
 
 my $dirlisting_defaulttemplates = {
-  page => qq(<html><head><meta http-equiv="content-type: text/html; charset=UTF-8"><title>%{dirname}</title></head><body><h1>%{dirname}/</h1>\n%{entries}</body></html>\n),
-  file => qq(<p>%{modeHR} %{sizeHR} %{mtimeISO} <a href="%{filename}">%{filename}</a></p>\n),
-  dir => qq(<p>%{modeHR} %{sizeHR} %{mtimeISO} <a href="%{filename}/">%{filename}/</a></p>\n),
+  page => qq(<html><head><meta http-equiv="content-type: text/html; charset=UTF-8"><title>%{dirname}</title></head><body><h1>%{dirname}/</h1>\n<table style="font-family: monospace; border: 0; border-collapse: collapse;">%{entries}</table></body></html>\n),
+  file => qq(<tr><td>%{modeHR}</td><td>%{sizeHR}</td><td>%{mtimeHR}</td><td><a href="%{link}">%{filename}</a></p>\n),
+  dir => qq(<tr><td>%{modeHR}</td><td>%{sizeHR}</td><td>%{mtimeHR}</td><td><a href="%{link}/">%{filename}/</a></p>\n),
 };
 
 sub create_dirlisting {
@@ -247,6 +250,7 @@ sub create_dirlisting {
       or die "cannot find: $!";
     local $/="\0";
     @entries = <$f>;
+    chomp @entries;
     close($f);
   } else {
     opendir(my $f, $dir) or die "cannot read dir \"$dir\": $!";
@@ -261,12 +265,12 @@ sub create_dirlisting {
     #$_ = [$_,[stat($prefix.$_)]];
     my @stat = stat($prefix.$_);
     my $isdir = S_ISDIR($stat[2]);
-    @$templdata{qw(filename dirslash mode modeHR size sizeMiB sizeHR mtime mtimeISO ctime ctimeISO)} =
-    (escapeHTML($_), $isdir ? "/" : "", sprintf("%04o",S_IMODE($stat[2])), filemode2hr($stat[2]), $stat[7], $stat[7]>>20, num2hr($stat[7])."B", $stat[9], time2hr($stat[9]), $stat[10], time2hr($stat[10]));
+    @$templdata{qw(filename link dirslash mode modeHR size sizeMiB sizeHR mtime mtimeHR ctime ctimeHR)} =
+    (escapeHTML($_), escapeHTML(urlescape($_)), $isdir ? "/" : "", sprintf("%04o",S_IMODE($stat[2])), filemode2hr($stat[2]), $stat[7], $stat[7]>>20, num2hr($stat[7])."B", $stat[9], time2hr($stat[9]), $stat[10], time2hr($stat[10]));
     my $templ = $templates->{$isdir ? "dir" : "file"};
     $_ = template_fill($templ,$templdata);
   }
-  delete @$templdata{qw(filename dirslash mode modeHR size sizeMiB sizeHR mtime mtimeISO ctime ctimeISO)};
+  delete @$templdata{qw(filename link dirslash mode modeHR size sizeMiB sizeHR mtime mtimeHR ctime ctimeHR)};
   $templdata->{entries} = join("",@entries);
   my $content = template_fill($templates->{page},$templdata);
   
@@ -357,7 +361,7 @@ sub cgi_process_request {
       for (@files) {
         my ($name,$handle) = @$_;
         my $clientfname = $data{$name};
-        my $ext = $clientfname =~ m{\.([^/.])+$} ? sanitize_filename($1) : "";
+        my $ext = $clientfname =~ m{\.([^/.]+)$} ? sanitize_filename($1) : "";
            #sanitize_filename($clientfname =~ s/^.*\.//rs);
         my $target = $dname."/".$name.".".$ext;
         $data{$name} = $dname_rel."/".$name.".".$ext;
