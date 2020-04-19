@@ -8,6 +8,9 @@
 # under the terms of the GNU General Public License version 2 or 3 as
 # published by the Free Software Foundation.
 
+# external dependencies:
+#   ffmpeg, ffprobe, libjson-perl
+
 use strict;
 use warnings;
 use POSIX qw(floor ceil);
@@ -18,7 +21,7 @@ use JSON;
 
 my $florex = qr/[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?/;
 my $json = JSON->new->relaxed->utf8->pretty->canonical;
-my $debug = 0;
+my $debug = 1;
 
 ### common functions
 
@@ -115,12 +118,14 @@ sub find_claps {
   $args{maxlen} //= 0.5;
 
   my @cmd = (qw(ffmpeg -hide_banner -nostats -nostdin -i),$infile,
-             qw(-af silencedetect=noise=-10dB:d=0.1 -f null -));
+             qw(-af silencedetect=noise=-30dB:duration=0.1 -f null -));
+             #qw(-af silencedetect=noise=-10dB:duration=0.1 -f null -));
 
   my ($c_in,$c_out);
   my $pid = open3($c_in, $c_out, 0,@cmd);
 
   my @claps;
+  local $_;
 
   while (<$c_out>) {
     if (/^\[silencedetect [^]]*\] silence_(?|(start): *+($florex)$|(end): *+($florex) )/) {
@@ -202,6 +207,43 @@ sub sync_detect {
 
 ### make_mix
 
+sub get_avfile_info {
+  my $fname = shift;
+  utf8::encode($fname);
+  my @cmd = (qw(ffprobe -loglevel error -hide_banner -show_streams),$fname);
+  open(my $f,"-|",@cmd) or die "cannot exec ffprobe: $!";
+  local $_;
+  my @streams;
+  my $current = undef;
+  while (<$f>) {
+    chomp;
+    if (/^\[STREAM\]$/) {
+      die "parse error" if defined $current;
+      $current = {};
+    } elsif (/^\[\/STREAM\]$/) {
+      die "parse error" if !defined $current;
+      push @streams, $current;
+      $current = undef;
+    } elsif (/^([^=]+)=(.*)$/) {
+      die "parse error" if !defined $current;
+      $current->{$1} = $2;
+    } else {
+      die "parse error: unrecognized line \"$_\"";
+    }
+  }
+  close($f);
+  my ($v,$a);
+  for (@streams) {
+    if ($_->{codec_type} eq "video" && !defined $v) {
+      $v = $_;
+    }
+    if ($_->{codec_type} eq "audio" && !defined $a) {
+      $a = $_;
+    }
+  }
+  return { video => $v, audio => $a, streams => \@streams };
+}
+
 sub make_mix {
   my ($infile,$outfile,$do_test) = @_;
 
@@ -222,7 +264,10 @@ sub make_mix {
 
 # TODO: mix different numbers of audio channels and non-video audio files.
 # TODO: allow stereo-mixing by positioning the parts.
+# TODO: different video resolutions.
+# FIXED: ffmpeg error "could not seek to position 0.100"
 
+  my ($nvideos,$naudios) = (0,0);
   for (@specs) {
     my $fname = $basedir."/".$$_[0];
     my $entry = load_json($fname);
@@ -233,25 +278,78 @@ sub make_mix {
     }
     my $d = dirname($fname);
     $entry->{file} =~ s/^/$d\//;
+    my $info = get_avfile_info($entry->{file});
+    $entry->{info} = $info;
     $$_[0] = $entry;
+    $nvideos++ if defined $info->{video};
+    $naudios++ if defined $info->{audio};
   }
 
-  my $cols = ceil(sqrt($nfiles));
-  my $rows = ceil($nfiles/$cols);
+  my $cols = ceil(sqrt($nvideos));
+  my $rows = ceil($nvideos/$cols);
 
   my $layout = join("|",map
       {
         my $x = join("+",("w0") x ($_ % $cols)) || "0";
         my $y = join("+",("h0") x floor($_ / $cols)) || "0";
         $x."_".$y;
-      } 0..$nfiles-1);
+      } 0..$nvideos-1);
 
   if (!defined $starttime) {
     my $minsync = undef;
     for (@specs) {
       $minsync = $_->[0]{sync} if !defined $minsync || $minsync > $_->[0]{sync};
     }
-    $starttime = -$minsync+0.1;
+    #$starttime = -$minsync+0.1;
+    $starttime = -$minsync;
+  }
+
+# Let's make the filter script a bit more systematic:
+#   [$_:v] <v-input-filters > [video$_];
+#   [$_:a] <a-input-filters > [audio$_];
+#   [video1]...[video$n] xstack, <v-output-filters> [vout];
+#   [audio1]...[audio$n] amix, <a-output-filters> [aout];
+# pan="stereo|c0=$A*c0+$A*c1|c1=$B*c0+$B*c1"
+# <a-input-filters> := asetpts=PTS+$delay/TB,pan="stereo|c0=$A*FC|c1=$B*FC"
+# <v-input-filters> := setpts=PTS+$delay/TB,scale=$w:-2
+
+  my (@prefilters,$vmixfilter,$amixfilter);
+
+  my ($video_i,$audio_i) = (0,0);
+  for (0..$nfiles-1) {
+    my @pan = @{$specs[$_][2]//[1,1]};
+    my $start = $specs[$_][0]{sync}+$starttime;
+    my $delay = -($specs[$_][0]{sync}+$starttime);
+    #if ($delay >= 0) {
+    #  $delay = "+$delay";
+    #}
+    #$delay="+0";
+    #$delay = "+1" if $_ == 0;
+    #push @prefilters,
+    #  "[$_:v] setpts=PTS$delay/TB [video$_]",
+    #  "[$_:a] asetpts=PTS$delay/TB [audio$_]";
+    my ($vid,$aud) = @{$specs[$_][0]{info}}{qw(video audio)};
+    if (defined $vid) {
+      push @prefilters,
+        "[$_:v] trim=$start,setpts=PTS-STARTPTS [video$video_i]";
+      $video_i++;
+    }
+    if (defined $aud) {
+      my $c = $aud->{channels};
+      $c = 2 if $c > 2;
+      $_ /= $c for @pan;
+      my $panstr = "stereo";
+      for my $i (0,1) {
+        $panstr.="|c$i=".join("+",map "$pan[$i]*c$_", 0..$c-1);
+      }
+      push @prefilters,
+        "[$_:a] atrim=$start,asetpts=PTS-STARTPTS,pan=$panstr [audio$audio_i]";
+      $audio_i++;
+    }
+
+    #push @prefilters,
+    #  "[$_:v] trim=$start,setpts=PTS-STARTPTS [video$_]",
+    #  "[$_:a] atrim=$start,asetpts=PTS-STARTPTS,pan=stereo|c0=$pan[0]*FC|c1=$pan[1]*FC [audio$_]";
   }
 
   my @fileargs = map {
@@ -261,22 +359,27 @@ sub make_mix {
 #      die "missing json parts" unless defined $entry->{$_};
 #    }
 #    ("-ss",$$syncdb{$$_[0]}{sync},"-i",$$syncdb{$$_[0]}{file})
-     ("-ss",$$_[0]{sync}+$starttime,"-i",$$_[0]{file})
+     #("-ss",$$_[0]{sync}+$starttime,"-i",$$_[0]{file})
+     #("-itsoffset",-($$_[0]{sync}+$starttime),"-i",$$_[0]{file})
+     ("-i",$$_[0]{file})
     } @specs;
-  my $a_inspec = join("",map "[$_:a]", 0..$nfiles-1);
-  my $v_inspec = join("",map "[$_:v]", 0..$nfiles-1);
-  my $weights = join(" ",map $$_[1], @specs);
+  #my $a_inspec = join("",map "[$_:a]", 0..$nfiles-1);
+  #my $v_inspec = join("",map "[$_:v]", 0..$nfiles-1);
+  my $a_inspec = join("",map "[audio$_]", 0..$naudios-1);
+  my $v_inspec = join("",map "[video$_]", 0..$nvideos-1);
+  my $aweights = join(" ",map $$_[1], grep defined($$_[0]{info}{audio}), @specs);
 
   my @test_args = $do_test ? qw(-t 20) : ();
   my $length = $mixinfo->{length};
   @test_args = ("-t",$length) if defined $length;
 
-  my @cmdline=(qw(ffmpeg -hide_banner -loglevel warning -y),
+  $amixfilter = "$a_inspec amix=inputs=$naudios:weights=$aweights:duration=longest [aout]";
+#   "$v_inspec vstack=inputs=$nvideos [v1]; [v1] scale=iw/4:-2 [video]",
+  $vmixfilter = "$v_inspec xstack=inputs=$nvideos:layout=$layout,scale=iw/$cols:-2 [vout]";
+  my @cmdline=(qw(ffmpeg -hide_banner -loglevel warning -accurate_seek -y),
      @fileargs,"-filter_complex",
-     "$a_inspec amix=inputs=$nfiles:weights=$weights:duration=longest [audio];".
-#   "$v_inspec vstack=inputs=$nfiles [v1]; [v1] scale=iw/4:-2 [video]",
-     "$v_inspec xstack=inputs=$nfiles:layout=$layout [v1]; [v1] scale=iw/$cols:-2 [video]",
-     qw(-map [video] -map [audio] -ar 48000 -codec:a mp3 -codec:v h264),@test_args,$outfile);
+       join(";",@prefilters,$amixfilter,$vmixfilter),
+     qw(-map [vout] -map [aout] -ar 48000 -codec:a mp3 -codec:v h264),@test_args,$outfile);
 
   #print STDERR "CMD: ",join(" ",map "<$_>", @cmdline),"\n";
   do_system(@cmdline);
@@ -488,7 +591,8 @@ sub do_ls {
   my $dirname = shift;
   utf8::encode($dirname);
   opendir(my $f, $dirname) or die "cannot read directory \"$dirname\": $!";
-  my @files = <$f>;
+  my @files = readdir($f);
+  closedir($f);
   utf8::decode($_) for @files;
   return @files;
 }
@@ -498,7 +602,12 @@ sub update_syncs {
   my @files = do_ls($dir);
   my @syncs = grep /^.*\.syncjson$/, @files;
   for (@syncs) {
-    sync_detect($dir."/".$_,"update");
+    eval {
+      sync_detect($dir."/".$_,"update");
+    };
+    if ($@) {
+      print STDERR "Warning: in sync \"$_\": $@\n";
+    }
   }
 }
 
@@ -548,7 +657,48 @@ sub update_mixes {
   }
 }
 
+sub create_syncjson {
+  my ($fname,$outfname) = @_;
+  $outfname //= ($fname =~ s{\.[^./]*$}{}r).".syncjson";
+  my $d1 = dirname($outfname);
+  my $d2 = dirname($fname);
+  if ($d1 eq $d2) {
+    $fname = basename($fname);
+  } elsif ($d1 eq ".") {
+    warn "Warning: embedding absolute file path"
+      if $d2 =~ /^\//;
+  } else {
+    die "Error: making a relative path is not implemented yet."
+      unless $d2 =~ /^\//;
+    warn "Warning: embedding absolute file path";
+  }
+  store_json($outfname,{ file => $fname, syncmode => "twoclap" });
+}
+
 ### dispatcher
+
+#  command => [ "arg1 arg2",
+#    "does something"],
+my %documentation = (
+  create_mix => [ "file_n[=weight_n]...",
+    "creates a new mix of the given files and writes it to stdout"],
+  make_mix => [ "infile [outfile] [test]",
+    "builds the mix described in infile. builds 10 seconds to \"test.avi\" if parameter \"test\" is given"], # FIXME: use outfile instead
+  sync_detect => [ "syncjsonfile [update]",
+    "applies the sync-method in syncjsonfile to find the sync beat and stores it in syncjsonfile. Does not re-calculate if \"update\" is given."],
+  make_vconductor => [ "specfile profiledir",
+    "makes a vconductor video from a given specfile."],
+  create_vconductor => [ "outfile bpm beats [key value]...",
+    "makes a vconductor video with the given bpm, beats and other named arguments. In particular \"profile\" should probably be given."],
+  create_syncjson => [ "mediafile outsyncjsonfile",
+    "creates a default syncjson file for a given mediafile."],
+  update_mixes => [ "[dir]",
+    "updates all mixes in dir (current directory, if not given)."],
+  update_syncs => [ "[dir]",
+    "updates all .syncjson files in dir (current directory, if not given)."],
+  help => [ "[all]|[command]...",
+    "shows help for a given command"],
+);
 
 my %cmds = (
   create_mix => \&create_mix,
@@ -556,15 +706,37 @@ my %cmds = (
   sync_detect => \&sync_detect,
   make_vconductor => \&make_vconductor,
   create_vconductor => \&create_vconductor,
+  create_syncjson => \&create_syncjson,
   update_mixes => \&update_mixes,
   update_syncs => \&update_syncs,
-  help => \&usage,
+  help => \&help,
 );
 
 sub usage {
   my @commands = sort keys %cmds;
   print "usage: $0 <cmd> <args>\n".
     "where <cmd> is one of: ".join(", ",@commands)."\n";
+}
+
+sub help {
+  my @args = @_;
+  if (@args == 0) {
+    usage();
+  } elsif ($args[0] eq "all") {
+    @args = sort keys %cmds;
+  }
+  for (@args) {
+    my $line;
+    my $doc = $documentation{$_};
+    if (defined $doc) {
+      $line = "  $_ ".$doc->[0]."\n      ".$doc->[1];
+    } else {
+      $line = defined $cmds{$_} ?
+        "command $_ exists, but is sadly undocumented" :
+        "command $_ does not exist";
+    }
+    print $line,"\n";
+  }
 }
 
 for (@ARGV) {

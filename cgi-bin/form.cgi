@@ -9,13 +9,17 @@
 # published by the Free Software Foundation.
 
 # accept zero or more files and multiple properties from a client, according to a spec stored in "$0.configs/" and selected via parameter "cfg".
-# spec = { fields => [{name => "name", value => "", label => "", type => "file"|"text"|..., title => "", values => [[option_id,text,tooltip],...], },...], rootdir => "/", filename => "%{project}/%{type}-%{name}.json", overwrite_ok => 1, mkdir => 1}
- 
+# spec = { fields : [{name : "name", value : "", label : "", type : "file"|"text"|..., title : "", values : [[option_id,text,tooltip],...], },...], rootdir : "/", filename : "%{project}/%{type}-%{name}.json", overwrite_ok : 1, mkdir : 1, dirlisting : "recursive", dirname : "%{project}", exec : [ "make", "-C", "%{project}" ] }
+
+# external dependencies:
+#  libjson-perl, libcgi-pm-perl
+
 use strict;
 use warnings;
 
 use IO::Handle;
-use Fcntl qw(O_WRONLY O_CREAT O_EXCL);
+use Fcntl qw(:mode O_WRONLY O_CREAT O_EXCL);
+use POSIX qw(floor strftime);
 #use File::Copy qw(move);
 use CGI qw(-utf8 escapeHTML);
 use JSON;
@@ -151,7 +155,9 @@ sub sanitize_filename {
   $fname =~ s/^.*\///;
   #$fname =~ s/[^a-zA-Z0-9 !"$%&()=?\[\]{}@~^+*'#<>|,.;:_-]//gs;
   # we want to be restrictive about filenames, because they might be downloaded from a legacy operating system.
-  $fname =~ s/[^a-zA-Z0-9 !$%&()=\[\]{}@~^+'#,.;_-]//gs;
+  $fname =~ s/[^a-zA-Z0-9 !$%&()=\[\]{}@~^+'#,.;_-]/_/gs;
+  # protects against "..", but we don't want "." and just more dots are bad on some legacy OSes, too.
+  $fname = "_" x length($fname) if $fname =~ /^\.+$/;
   return $fname;
 }
 
@@ -189,6 +195,84 @@ sub store_file {
   }
   close($f) or die "error while closing $filename: $!";
   return 1;
+}
+
+sub filemode2hr {
+  my $mode = shift;
+  my $acl = printf "%012b", $mode & 07777;
+    # we hardcode S_IMODE(x) == (x & 07777) here for good reasons.
+  $acl =~ y/01/\0\xff/;
+  $acl = ("$acl" & "tssrwxrwxrwx") | (~"$acl" & "------------");
+  # ignore suid/sticky. TODO: do we need them in any way?
+  $acl = substr($acl,3);
+  my $type = { S_IFREG, "-", S_IFDIR, "d", S_IFLNK, "l", S_IFBLK, "b", S_IFCHR, "c", S_IFIFO, "p", S_IFSOCK, "s" }->{S_IFMT($mode)};
+  $type //= "?";
+  return $type.$acl;
+}
+
+sub num2hr {
+  my $num = shift;
+  # This formula is actually not required to be in any form exact. It just
+  # defines the point, where the next unit is used.
+  #my $i = $num == 0 ? 0 : log($num*10)/log(1000);
+  my $i = $num == 0 ? 0 : floor(log(abs($num)*2)/log(1024));
+  $i = -6 if $i < -6;
+  $i = 5 if $i > 5;
+  #my $prefix = (qw(a f p n u m),"",qw(k M G T P))[$i+6];
+  #$num *= 1000**(-$i);
+  my $prefix = (qw(ai fi pi ni ui mi),"",qw(ki Mi Gi Ti Pi))[$i+6];
+  $num *= 1024**(-$i);
+  return sprintf "%.3g%s",$num,$prefix;
+}
+
+sub time2hr {
+  my $time = shift;
+  my $timestamp = strftime "%Y-%m-%d-%H:%M:%S", gmtime($time);
+  return $timestamp;
+}
+
+my $dirlisting_defaulttemplates = {
+  page => qq(<html><head><meta http-equiv="content-type: text/html; charset=UTF-8"><title>%{dirname}</title></head><body><h1>%{dirname}/</h1>\n%{entries}</body></html>\n),
+  file => qq(<p>%{modeHR} %{sizeHR} %{mtimeISO} <a href="%{filename}">%{filename}</a></p>\n),
+  dir => qq(<p>%{modeHR} %{sizeHR} %{mtimeISO} <a href="%{filename}/">%{filename}/</a></p>\n),
+};
+
+sub create_dirlisting {
+  my ($dir,$recursive,$templates) = @_;
+  $templates //= $dirlisting_defaulttemplates;
+  my @entries;
+  if ($recursive) {
+    open(my $f, "-|", "find", ($dir =~ s{^-}{./-}r),
+                            qw(-mindepth 1 -printf %P\0))
+      or die "cannot find: $!";
+    local $/="\0";
+    @entries = <$f>;
+    close($f);
+  } else {
+    opendir(my $f, $dir) or die "cannot read dir \"$dir\": $!";
+    @entries = readdir($f);
+    closedir($f);
+  }
+  my $prefix = $dir;
+  $prefix .= "/" unless $prefix =~ m{/$};
+  my $templdata = { prefix => escapeHTML($prefix), dir => escapeHTML($dir),
+                    dirname => escapeHTML(basename($dir)) };
+  for (@entries) {
+    #$_ = [$_,[stat($prefix.$_)]];
+    my @stat = stat($prefix.$_);
+    my $isdir = S_ISDIR($stat[2]);
+    @$templdata{qw(filename dirslash mode modeHR size sizeMiB sizeHR mtime mtimeISO ctime ctimeISO)} =
+    (escapeHTML($_), $isdir ? "/" : "", sprintf("%04o",S_IMODE($stat[2])), filemode2hr($stat[2]), $stat[7], $stat[7]>>20, num2hr($stat[7])."B", $stat[9], time2hr($stat[9]), $stat[10], time2iso($stat[10]));
+    my $templ = $templates->{$isdir ? "dir" : "file"};
+    $_ = template_fill($templ,$templdata);
+  }
+  delete @$templdata{qw(filename dirslash mode modeHR size sizeMiB sizeHR mtime mtimeISO ctime ctimeISO)};
+  $templdata->{entries} = join("",@entries);
+  my $content = template_fill($templates->{page},$templdata);
+  
+  open (my $f, ">", $prefix."index.html") or die "cannot create index: $!";
+  print $f $content;
+  close($f);
 }
 
 # FIXED: some devices send multiple files with the same name.
@@ -244,15 +328,9 @@ sub cgi_process_request {
       # FIXED: use template engine here.
       my $fname = $cfg->{filename} // '%{file}';
       $fname = template_fill($fname,\%templdata);
-#       $fname =~ s<%(?:%|\{([^}]++)\})><
-#           !defined $1 ? "%" :
-#           defined $data{$1} ? sanitize_filename($data{$1}) :
-#           "";
-#         >ges;
       $fname = "noname" if $fname eq "";
       
       my $dirname = dirname($fname);
-      #my $dirname = $fname =~ s{/[^/]*$}{}r;
       
       if (!-d $dirname) {
         if ($cfg->{mkdir} && ! -e $dirname) {
@@ -279,7 +357,8 @@ sub cgi_process_request {
       for (@files) {
         my ($name,$handle) = @$_;
         my $clientfname = $data{$name};
-        my $ext = sanitize_filename($clientfname =~ s/^.*\.//rs);
+        my $ext = $clientfname =~ m{\.([^/.])$} ? sanitize_filename($1) : "";
+           #sanitize_filename($clientfname =~ s/^.*\.//rs);
         my $target = $dname."/".$name.".".$ext;
         $data{$name} = $dname_rel."/".$name.".".$ext;
         my $len;
@@ -294,6 +373,25 @@ sub cgi_process_request {
         $link = template_fill($link,\%templdata);
         # FIXME: urlencode
         $msg .= escapeHTML("<a href=\"$link\">See here</a>")."<br/>\n";
+      }
+      if ($cfg->{dirlisting}) {
+        my $rec = ($cfg->{dirlisting} eq "recursive");
+        my $templates = $cfg->{dirlisting_templates}; # or undef.
+        my $dir = $dirname;
+        if (defined $cfg->{dirname}) {
+          $dir = template_fill($cfg->{dirname},\%templdata);
+        }
+        create_dirlisting($dir,$rec,$templates);
+      }
+      if ($cfg->{exec}) {
+        die unless ref $cfg->{exec} eq "ARRAY";
+        my @args = @{$cfg->{exec}};
+        my $cmd = shift @args;
+        for (@args) {
+          $_ = template_fill($_,\%templdata);
+        }
+        # TODO: harden before enabling:
+        #system($cmd,@args);
       }
     };
     if ($@) {
