@@ -311,6 +311,28 @@ sub cgi_process_request {
   my $fields = $cfg->{fields}//[];
   die "no fields" unless @$fields;
 
+  my $forceidx = $q->url_param("force_index");
+  if ($forceidx) {
+    if ($cfg->{dirlisting}) {
+      my $rec = ($cfg->{dirlisting} eq "recursive");
+      my $templates = $cfg->{dirlisting_templates}; # or undef.
+      
+      my %templdata;
+      $templdata{cfg} = $cfgname;
+     
+      my $dir; 
+      if (defined $cfg->{dirname}) {
+        $dir = template_fill($cfg->{dirname},\%templdata);
+      } else {
+        my $fname = $cfg->{filename} // '%{file}';
+        $fname = template_fill($fname,\%templdata);
+        $fname = "noname" if $fname eq "";
+        $dir = dirname($fname);
+      }
+      create_dirlisting($dir,$rec,$templates);
+    }
+  }
+
   my $msg = "";
   #$msg = `pwd`;
   if ($meth eq "POST") {
