@@ -269,6 +269,7 @@ sub create_dirlisting {
     @entries = readdir($f);
     closedir($f);
   }
+  @entries = sort @entries;
   my $prefix = $dir;
   $prefix .= "/" unless $prefix =~ m{/$};
   my $templdata = { prefix => escapeHTML($prefix), dir => escapeHTML($dir),
