@@ -690,7 +690,7 @@ my %documentation = (
     "makes a vconductor video from a given specfile."],
   create_vconductor => [ "outfile bpm beats [key value]...",
     "makes a vconductor video with the given bpm, beats and other named arguments. In particular \"profile\" should probably be given."],
-  create_syncjson => [ "mediafile outsyncjsonfile",
+  create_syncjson => [ "mediafile [outsyncjsonfile]",
     "creates a default syncjson file for a given mediafile."],
   update_mixes => [ "[dir]",
     "updates all mixes in dir (current directory, if not given)."],

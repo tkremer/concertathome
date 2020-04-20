@@ -247,8 +247,8 @@ my $dirlisting_defaulttemplates = {
 <table>
 %{entries}</table></body></html>
 EOHTML
-  file => qq(<tr><td>%{modeHR}</td><td class="size">%{sizeHR}</td><td>%{mtimeHR}</td><td><a href="%{link}">%{filename}</a></p>\n),
-  dir => qq(<tr><td>%{modeHR}</td><td class="size">%{sizeHR}</td><td>%{mtimeHR}</td><td>%{filename}/</p>\n),
+  file => qq(<tr><td>%{modeHR}</td><td class="size">%{sizeHR}</td><td>%{mtimeHR}</td><td><a href="%{link}">%{filename}</a></td></tr>\n),
+  dir => qq(<tr><td>%{modeHR}</td><td class="size">%{sizeHR}</td><td>%{mtimeHR}</td><td>%{filename}/</td></tr>\n),
   #dir => qq(<tr><td>%{modeHR}</td><td>%{sizeHR}</td><td>%{mtimeHR}</td><td><a href="%{link}/">%{filename}/</a></p>\n),
 };
 
