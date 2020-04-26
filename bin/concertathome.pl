@@ -217,19 +217,34 @@ sub get_avfile_info {
   my $current = undef;
   while (<$f>) {
     chomp;
-    if (/^\[STREAM\]$/) {
-      die "parse error" if defined $current;
-      $current = {};
-    } elsif (/^\[\/STREAM\]$/) {
-      die "parse error" if !defined $current;
-      push @streams, $current;
-      $current = undef;
-    } elsif (/^([^=]+)=(.*)$/) {
-      die "parse error" if !defined $current;
-      $current->{$1} = $2;
+    if (/^(?:\[(\/?)STREAM\]|([^=]+)=(.*))$/) {
+      if (!defined $1) {
+        die "parse error" if !defined $current;
+        $current->{$2} = $3;
+      } elsif ($1 eq "") {
+        die "parse error" if defined $current;
+        $current = {};
+      } else {
+        die "parse error" if !defined $current;
+        push @streams, $current;
+        $current = undef;
+      }
     } else {
       die "parse error: unrecognized line \"$_\"";
     }
+#     if (/^\[STREAM\]$/) {
+#       die "parse error" if defined $current;
+#       $current = {};
+#     } elsif (/^\[\/STREAM\]$/) {
+#       die "parse error" if !defined $current;
+#       push @streams, $current;
+#       $current = undef;
+#     } elsif (/^([^=]+)=(.*)$/) {
+#       die "parse error" if !defined $current;
+#       $current->{$1} = $2;
+#     } else {
+#       die "parse error: unrecognized line \"$_\"";
+#     }
   }
   close($f);
   my ($v,$a);
@@ -242,6 +257,95 @@ sub get_avfile_info {
     }
   }
   return { video => $v, audio => $a, streams => \@streams };
+}
+
+sub get_mix_files {
+  my ($mixinfo,$basedir) = @_;
+  my $spec = $mixinfo->{files};
+  my @files;
+  my $filelist;
+  my $proplist;
+  if (ref $spec eq "ARRAY") {
+    for my $s (@$spec) {
+      if (ref $s eq "ARRAY") {
+        push @files,
+          {file => $$s[0], weight => $$s[1]//1, stereo => $$s[2]//[1,1]};
+      } elsif (ref $s eq "HASH") {
+        if (defined $$s{file}) {
+          push @files, $s;
+        } elsif (defined $$s{files}) {
+          if (!defined $filelist) {
+            $filelist = [ sort grep /\.syncjson$/, do_ls($basedir)];
+            #print STDERR "filelist=[",join(" ", @$filelist),"]\n";
+          }
+          # TODO: if we can't trust the file, we may need to use a linear-time regex matcher instead of perl's. There is no arbitrary code execution here, but an algorithmic denial of service.
+          my $rex = $$s{files};
+          die "bad rex" if ref $rex ne "";
+          $rex = qr/^$rex\.syncjson$/s;
+          #$rex = NFA->new(rex => $rex."\\.syncjson");
+          my @candidates = grep /$rex/, @$filelist;
+          #print STDERR "$rex matches [".join(" ",@candidates)."]\n";
+          if (defined $$s{match}) {
+            my @k = keys %{$$s{match}};
+            my @rexes = values %{$$s{match}};
+            for (@rexes) {
+              die "bad rex" if ref $_ ne "";
+              $_ = qr/^$_$/s;
+              #$_ = NFA->new(rex => $_);
+            }
+            for my $cand (@candidates) {
+              my $props = $$proplist{$cand};
+              if (!defined $props) {
+                my $fname = $basedir."/".$cand;
+                eval {
+                  $props = load_json($fname);
+                  my $d = dirname($fname);
+                  $props->{file} =~ s/^/$d\//;
+                  $$proplist{$cand} = $props;
+                };
+                if ($@) {
+                  undef $cand;
+                  last;
+                }
+              }
+              for my $i (0..$#k) {
+                undef $cand,last unless ($$props{$k[$i]}//"") =~ $rexes[$i];
+              }
+            }
+          }
+          @candidates = grep defined, @candidates;
+          next unless @candidates;
+          for (@candidates) {
+            push @files, {file => $_, weight => $$s{weight}//1,
+                      stereo => $$s{stereo}//[1,1], props => $$proplist{$_}};
+          }
+        } else {
+          die "need \"file\" or \"files\".";
+        }
+      } elsif (defined $s && ref $s eq "") {
+        push @files, {file => $s, weight => 1, stereo => [1,1]};
+      } else {
+        die "invalid type";
+      }
+    }
+  } else {
+    die "expected an array of files";
+  }
+  for (@files) {
+    if (!defined $$_{props}) {
+      my $file = $$_{file};
+      my $props = $$proplist{$file};
+      if (!defined $props) {
+        my $fname = $basedir."/".$file;
+        $props = load_json($fname);
+        my $d = dirname($fname);
+        $props->{file} =~ s/^/$d\//;
+        $$proplist{$file} = $props;
+      }
+      $$_{props} = $props;
+    }
+  }
+  return \@files;
 }
 
 sub make_mix {
@@ -257,33 +361,42 @@ sub make_mix {
   my $mixinfo = load_json($infile);
 
   my $starttime = $mixinfo->{starttime};
-  my @specs = @{$mixinfo->{files}};
+  my @specs = @{get_mix_files($mixinfo,$basedir)};
   my $nfiles = @specs;
 
-  #my $syncdb = load_json("syncdb.json");
+  die "nfiles <= 1: $nfiles" if $nfiles <= 1;
 
-# TODO: mix different numbers of audio channels and non-video audio files.
-# TODO: allow stereo-mixing by positioning the parts.
+# DONE: mix different numbers of audio channels and non-video audio files.
+# DONE: allow stereo-mixing by positioning the parts.
 # TODO: different video resolutions.
 # FIXED: ffmpeg error "could not seek to position 0.100"
 
   my ($nvideos,$naudios) = (0,0);
   for (@specs) {
-    my $fname = $basedir."/".$$_[0];
-    my $entry = load_json($fname);
-    #my $entry = $$syncdb{$$_[0]};
-    #die "file \"$fname\" not found: $@" unless defined $entry;
+    my $props = $$_{props};
+    my $fname = $basedir."/".$$_{file};
+    #my $fname = $basedir."/".$$_[0];
+    #my $entry = load_json($fname);
     for (qw(sync syncmode file)) {
-      die "missing json parts" unless defined $entry->{$_};
+      die "missing json parts" unless defined $props->{$_};
     }
-    my $d = dirname($fname);
-    $entry->{file} =~ s/^/$d\//;
-    my $info = get_avfile_info($entry->{file});
-    $entry->{info} = $info;
-    $$_[0] = $entry;
+    #my $d = dirname($fname);
+    # FIXED: $entry may be shared, but is modified here.
+    #$props->{file} =~ s/^/$d\//;
+    my $info = $props->{info};
+    if (!defined ($info)) {
+      $info = get_avfile_info($props->{file});
+      $props->{info} = $info;
+    }
+    $$_{info} = $info; # redundant, but convenient.
+    #$$_[0] = $entry;
     $nvideos++ if defined $info->{video};
     $naudios++ if defined $info->{audio};
   }
+
+  # TODO: support nvideos <= 1
+  die "nvideos <= 1 is not yet implemented (nvideos = $nvideos)"
+    if $nvideos <= 1;
 
   my $cols = ceil(sqrt($nvideos));
   my $rows = ceil($nvideos/$cols);
@@ -298,7 +411,10 @@ sub make_mix {
   if (!defined $starttime) {
     my $minsync = undef;
     for (@specs) {
-      $minsync = $_->[0]{sync} if !defined $minsync || $minsync > $_->[0]{sync};
+      #$minsync = $_->[0]{sync}
+      #  if !defined $minsync || $minsync > $_->[0]{sync};
+      $minsync = $$_{props}{sync}
+        if !defined $minsync || $minsync > $$_{props}{sync};
     }
     #$starttime = -$minsync+0.1;
     $starttime = -$minsync;
@@ -317,18 +433,10 @@ sub make_mix {
 
   my ($video_i,$audio_i) = (0,0);
   for (0..$nfiles-1) {
-    my @pan = @{$specs[$_][2]//[1,1]};
-    my $start = $specs[$_][0]{sync}+$starttime;
-    my $delay = -($specs[$_][0]{sync}+$starttime);
-    #if ($delay >= 0) {
-    #  $delay = "+$delay";
-    #}
-    #$delay="+0";
-    #$delay = "+1" if $_ == 0;
-    #push @prefilters,
-    #  "[$_:v] setpts=PTS$delay/TB [video$_]",
-    #  "[$_:a] asetpts=PTS$delay/TB [audio$_]";
-    my ($vid,$aud) = @{$specs[$_][0]{info}}{qw(video audio)};
+    my @pan = @{$specs[$_]{stereo}};
+    my $start = $specs[$_]{props}{sync}+$starttime;
+    my $delay = -($specs[$_]{props}{sync}+$starttime);
+    my ($vid,$aud) = @{$specs[$_]{info}}{qw(video audio)};
     if (defined $vid) {
       push @prefilters,
         "[$_:v] trim=$start,setpts=PTS-STARTPTS [video$video_i]";
@@ -346,10 +454,6 @@ sub make_mix {
         "[$_:a] atrim=$start,asetpts=PTS-STARTPTS,pan=$panstr [audio$audio_i]";
       $audio_i++;
     }
-
-    #push @prefilters,
-    #  "[$_:v] trim=$start,setpts=PTS-STARTPTS [video$_]",
-    #  "[$_:a] atrim=$start,asetpts=PTS-STARTPTS,pan=stereo|c0=$pan[0]*FC|c1=$pan[1]*FC [audio$_]";
   }
 
   my @fileargs = map {
@@ -361,13 +465,13 @@ sub make_mix {
 #    ("-ss",$$syncdb{$$_[0]}{sync},"-i",$$syncdb{$$_[0]}{file})
      #("-ss",$$_[0]{sync}+$starttime,"-i",$$_[0]{file})
      #("-itsoffset",-($$_[0]{sync}+$starttime),"-i",$$_[0]{file})
-     ("-i",$$_[0]{file})
+     ("-i",$$_{props}{file})
     } @specs;
   #my $a_inspec = join("",map "[$_:a]", 0..$nfiles-1);
   #my $v_inspec = join("",map "[$_:v]", 0..$nfiles-1);
   my $a_inspec = join("",map "[audio$_]", 0..$naudios-1);
   my $v_inspec = join("",map "[video$_]", 0..$nvideos-1);
-  my $aweights = join(" ",map $$_[1], grep defined($$_[0]{info}{audio}), @specs);
+  my $aweights = join(" ",map $$_{weight}, grep defined($$_{info}{audio}), @specs);
 
   my @test_args = $do_test ? qw(-t 20) : ();
   my $length = $mixinfo->{length};
@@ -376,6 +480,7 @@ sub make_mix {
   $amixfilter = "$a_inspec amix=inputs=$naudios:weights=$aweights:duration=longest [aout]";
 #   "$v_inspec vstack=inputs=$nvideos [v1]; [v1] scale=iw/4:-2 [video]",
   $vmixfilter = "$v_inspec xstack=inputs=$nvideos:layout=$layout,scale=iw/$cols:-2 [vout]";
+  # TODO: filter should be given in a file or fd rather than an arg.
   my @cmdline=(qw(ffmpeg -hide_banner -loglevel warning -accurate_seek -y),
      @fileargs,"-filter_complex",
        join(";",@prefilters,$amixfilter,$vmixfilter),
