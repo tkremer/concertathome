@@ -15,6 +15,7 @@ use strict;
 use warnings;
 use POSIX qw(floor ceil);
 use Fcntl ":flock";
+use File::Spec;
 use File::Basename;
 use File::Temp ();
 use IPC::Open3;
@@ -563,6 +564,8 @@ sub vconductor {
   my ($spec,$profiledir) = @_;
   $profiledir //= "vconductor_profile";
 
+  $profiledir = File::Spec->rel2abs($profiledir);
+
   ### read the profile
 
   my $profile = load_json($profiledir."/spec.json");
@@ -591,9 +594,11 @@ sub vconductor {
   my $beat_samples = slurp($insamples_file);
   my $beat_samples_count = length($beat_samples)/$sample_channels/2;
   
-  # FIXME: get a tempdir for that.
-  my $frame_links_dir = "tmp.frames";
-  my $samples_file = "tmp.samples";
+  my $tempdir = File::Temp->newdir(CLEANUP => 1);
+
+  # FIXED: get a tempdir for that.
+  my $frame_links_dir = "$tempdir/tmp.frames";
+  my $samples_file = "$tempdir/tmp.samples";
 
   ### read the spec
   
@@ -691,7 +696,11 @@ sub vconductor {
   
     #my $ref_i = 1+floor($beatpos/2*($inframes_count-0.01));
     my $ref_i = 1+floor($beatpos/2*$inframes_count);
-    symlink sprintf("../%s/%04d.png",$inframes_dir,$ref_i),
+    #symlink sprintf("../%s/%04d.png",$inframes_dir,$ref_i),
+    #        sprintf("%s/%04d.png",$frame_links_dir,$i+1);
+
+    # These are absolute symlinks now.
+    symlink sprintf("%s/%04d.png",$inframes_dir,$ref_i),
             sprintf("%s/%04d.png",$frame_links_dir,$i+1);
   }
 
@@ -729,8 +738,9 @@ sub vconductor {
   #print STDERR "CMD: ",join(" ",map "<$_>", @cmdline),"\n";
   do_system(@cmdline);
 
-  do_system(qw(rm -r),$frame_links_dir);
-  unlink $samples_file;
+  # handled by $tempdir
+  #do_system(qw(rm -r),$frame_links_dir);
+  #unlink $samples_file;
 }
 
 # make from json spec
