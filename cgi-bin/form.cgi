@@ -9,7 +9,7 @@
 # published by the Free Software Foundation.
 
 # accept zero or more files and multiple properties from a client, according to a spec stored in "$0.configs/" and selected via parameter "cfg".
-# spec = { fields : [{name : "name", value : "", label : "", type : "file"|"text"|..., title : "", values : [[option_id,text,tooltip],...], },...], rootdir : "/", filename : "%{project}/%{type}-%{name}.json", overwrite_ok : 1, mkdir : 1, dirlisting : "recursive", dirname : "%{project}", exec : [ "make", "-C", "%{project}" ] }
+# spec = { fields : [{name : "name", value : "", label : "", type : "file"|"text"|..., title : "", values : [[option_id,text,tooltip],...], },...], rootdir : "/", filename : "%{project}/%{type}-%{name}.json", overwrite_ok : 1, mkdir : 1, dirlisting : "recursive", dirname : "%{project}", exec : [ "make", "-C", "%{project}", duplicate : "rename"|"overwrite"|"fail" ] }
 
 # external dependencies:
 #  libjson-perl, libcgi-pm-perl
@@ -163,13 +163,14 @@ sub sanitize_filename {
 
 sub lock_new_file {
   # make sure the filename is unique and safe from race conditions.
-  my $base = shift;
+  my ($base,$no_rename) = @_;
   $base =~ s/(\.[^.]+)$//;
   my $ext = $1//"";
   my $name = $base.$ext;
   my $i = 0;
   my $f;
   while (!sysopen ($f,$name,O_WRONLY|O_CREAT|O_EXCL)) {
+    die "file exists" if $no_rename;
     $i++;
     $name = $base."-$i".$ext;
   }
@@ -384,8 +385,13 @@ sub cgi_process_request {
           die "mkdir feature is disabled or \"$dirname\" is a non-directory.";
         }
       }
-      #$fname = $destdir.$fname;
-      $fname = lock_new_file($fname);
+      # duplicate = "rename"|"overwrite"|"fail"
+      if (-e $fname && ($cfg->{duplicate}//"") eq "overwrite") {
+        unlink $fname;
+        my $dname = $fname.".d";
+        system(qw(rm -r --),$dname) if -d $dname;
+      }
+      $fname = lock_new_file($fname,($cfg->{duplicate}//"rename") ne "rename");
       $templdata{".file"} = $fname;
       $templdata{".basename"} = basename($fname);
 
