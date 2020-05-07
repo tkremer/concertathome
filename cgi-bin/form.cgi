@@ -391,9 +391,11 @@ sub cgi_process_request {
 
       push @cleanup, $fname;
       my $dname = $fname.".d";
-      mkdir $dname;
-      push @cleanup, $dname;
       my $dname_rel = basename($dname);
+      if (@files) {
+        mkdir $dname;
+        push @cleanup, $dname;
+      }
          #$dname =~ s{^.*/}{}rs;
        # filename => "%{project}/%{type}-%{name}.json
 
