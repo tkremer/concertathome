@@ -16,6 +16,7 @@ use warnings;
 use POSIX qw(floor ceil);
 use Fcntl ":flock";
 use File::Basename;
+use File::Temp ();
 use IPC::Open3;
 use JSON;
 
@@ -85,7 +86,7 @@ sub store_json {
 
 ### create_mix
 
-# TODO: support starttime
+# TODO: support starttime and all the other mix features
 
 sub create_mix {
   my @spec = @_;
@@ -317,7 +318,8 @@ sub get_mix_files {
           next unless @candidates;
           for (@candidates) {
             push @files, {file => $_, weight => $$s{weight}//1,
-                      stereo => $$s{stereo}//[1,1], props => $$proplist{$_}};
+                      stereo => $$s{stereo}//[1,1], props => $$proplist{$_},
+                      only => $$s{only}//""};
           }
         } else {
           die "need \"file\" or \"files\".";
@@ -353,10 +355,10 @@ sub make_mix {
 
   $do_test = ($do_test//"") eq "test";
   $outfile = $do_test ? "test.avi" : $outfile;
-  $outfile //= $infile.".avi";
+  #$outfile //= $infile.".avi"; # or .mp3.
 
-  die "need input and output filenames"
-    unless defined $infile && defined $outfile;
+  die "need at least an input filename"
+    unless defined $infile;
   my $basedir = dirname($infile);
   my $mixinfo = load_json($infile);
 
@@ -368,9 +370,10 @@ sub make_mix {
 
 # DONE: mix different numbers of audio channels and non-video audio files.
 # DONE: allow stereo-mixing by positioning the parts.
-# TODO: different video resolutions.
+# DONE: different video resolutions. -> are scaled to fit.
 # FIXED: ffmpeg error "could not seek to position 0.100"
 
+  my $resolution = $$mixinfo{resolution};
   my ($nvideos,$naudios) = (0,0);
   for (@specs) {
     my $props = $$_{props};
@@ -390,22 +393,44 @@ sub make_mix {
     }
     $$_{info} = $info; # redundant, but convenient.
     #$$_[0] = $entry;
-    $nvideos++ if defined $info->{video};
-    $naudios++ if defined $info->{audio};
+    $$_{do_video} = defined $info->{video} && ($$_{only}//"") ne "audio";
+    $$_{do_audio} = defined $info->{audio} && ($$_{only}//"") ne "video";
+    $nvideos++ if $$_{do_video};
+    $naudios++ if $$_{do_audio};
+    if (!defined $resolution && $$_{do_video}) {
+      $resolution = [@{$info->{video}}{qw(width height)}];
+    }
   }
 
-  # TODO: support nvideos <= 1
-  die "nvideos <= 1 is not yet implemented (nvideos = $nvideos)"
-    if $nvideos <= 1;
+  # DONE: support nvideos <= 1
+  #die "nvideos <= 1 is not yet implemented (nvideos = $nvideos)"
+  #  if $nvideos <= 1;
 
-  my $cols = ceil(sqrt($nvideos));
+  my $do_video = $nvideos > 0 && ($$mixinfo{only}//"") ne "audio"
+    && !(defined $outfile && $outfile =~ /\.mp3$/);
+  my $do_audio = $naudios > 0 && ($$mixinfo{only}//"") ne "video";
+  $nvideos = 0 if !$do_video;
+  $naudios = 0 if !$do_audio;
+  $outfile //= $infile.($do_video ? ".avi" : ".mp3");
+  $outfile =~ s{^-}{./-};
+
+  my $grid_aspect = $$mixinfo{grid_aspect}//1;
+  # cols/rows ~= $grid_aspect <= cols/rows
+  # e.g. $grid_aspect ~ 16/9 for merging vertical 3:4 videos into a horizontal 4:3 one. (256/81 ~ 3.16 for 9:16 -> 16:9)
+  my $cols = ceil(sqrt($nvideos*$grid_aspect)) || 1;
   my $rows = ceil($nvideos/$cols);
+
+  my @x_pos = map floor($_/$cols*$$resolution[0]), 0..$cols;
+  my @y_pos = map floor($_/$rows*$$resolution[1]), 0..$rows;
+  my @widths = map $x_pos[$_+1]-$x_pos[$_], 0..$cols-1;
+  my @heights = map $y_pos[$_+1]-$y_pos[$_], 0..$rows-1;
 
   my $layout = join("|",map
       {
-        my $x = join("+",("w0") x ($_ % $cols)) || "0";
-        my $y = join("+",("h0") x floor($_ / $cols)) || "0";
-        $x."_".$y;
+        #my $x = join("+",("w0") x ($_ % $cols)) || "0";
+        #my $y = join("+",("h0") x floor($_ / $cols)) || "0";
+        #$x."_".$y;
+        $x_pos[$_ % $cols]."_".$y_pos[$_ / $cols];
       } 0..$nvideos-1);
 
   if (!defined $starttime) {
@@ -429,7 +454,8 @@ sub make_mix {
 # <a-input-filters> := asetpts=PTS+$delay/TB,pan="stereo|c0=$A*FC|c1=$B*FC"
 # <v-input-filters> := setpts=PTS+$delay/TB,scale=$w:-2
 
-  my (@prefilters,$vmixfilter,$amixfilter);
+  #my (@prefilters,$vmixfilter,$amixfilter);
+  my @filters;
 
   my ($video_i,$audio_i) = (0,0);
   for (0..$nfiles-1) {
@@ -437,12 +463,29 @@ sub make_mix {
     my $start = $specs[$_]{props}{sync}+$starttime;
     my $delay = -($specs[$_]{props}{sync}+$starttime);
     my ($vid,$aud) = @{$specs[$_]{info}}{qw(video audio)};
-    if (defined $vid) {
-      push @prefilters,
-        "[$_:v] trim=$start,setpts=PTS-STARTPTS [video$video_i]";
+    my ($do_vid,$do_aud) = @{$specs[$_]}{qw(do_video do_audio)};
+    if ($do_video && $do_vid) {
+      my @out_size = ($widths[$video_i % $cols],$heights[$video_i / $cols]);
+      my @in_size = @$vid{qw(width height)};
+      # what's the best solution for this?
+      my $scaled_h = $out_size[0]*$in_size[1]/$in_size[0];
+      # convert aspect ratio -> crop or pad?
+      my $scalefilter;
+      if ($scaled_h > $out_size[1]) { # too high
+        #my $h = int($out_size[1]/$out_size[0]*$in_size[0]);
+        $scalefilter = "scale=$out_size[0]:-1,crop=h=$out_size[1]:exact=1";
+      } elsif ($scaled_h < $out_size[1]) { # too wide
+        $scalefilter = "scale=-1:$out_size[1],crop=w=$out_size[0]:exact=1";
+      } else {
+        $scalefilter = "scale=$out_size[0]:$out_size[1]";
+      }
+      # special case because xstack can't handle exactly one video and we don't do any additional output filtering.
+      my $vout = $nvideos == 1 ? "[vout]" : "[video$video_i]";
+      push @filters,
+        "[$_:v] trim=$start,setpts=PTS-STARTPTS,$scalefilter $vout";
       $video_i++;
     }
-    if (defined $aud) {
+    if ($do_audio && $do_aud) {
       my $c = $aud->{channels};
       $c = 2 if $c > 2;
       $_ /= $c for @pan;
@@ -450,10 +493,13 @@ sub make_mix {
       for my $i (0,1) {
         $panstr.="|c$i=".join("+",map "$pan[$i]*c$_", 0..$c-1);
       }
-      push @prefilters,
+      push @filters,
         "[$_:a] atrim=$start,asetpts=PTS-STARTPTS,pan=$panstr [audio$audio_i]";
       $audio_i++;
     }
+  }
+  if ($video_i != $nvideos || $audio_i != $naudios) {
+    die "Bug: miscount of videos/audios ($video_i/$nvideos, $audio_i/$naudios)";
   }
 
   my @fileargs = map {
@@ -471,20 +517,38 @@ sub make_mix {
   #my $v_inspec = join("",map "[$_:v]", 0..$nfiles-1);
   my $a_inspec = join("",map "[audio$_]", 0..$naudios-1);
   my $v_inspec = join("",map "[video$_]", 0..$nvideos-1);
-  my $aweights = join(" ",map $$_{weight}, grep defined($$_{info}{audio}), @specs);
+  my $aweights = join(" ",map $$_{weight}//1, grep $$_{do_audio}, @specs);
 
   my @test_args = $do_test ? qw(-t 20) : ();
   my $length = $mixinfo->{length};
   @test_args = ("-t",$length) if defined $length;
 
-  $amixfilter = "$a_inspec amix=inputs=$naudios:weights=$aweights:duration=longest [aout]";
-#   "$v_inspec vstack=inputs=$nvideos [v1]; [v1] scale=iw/4:-2 [video]",
-  $vmixfilter = "$v_inspec xstack=inputs=$nvideos:layout=$layout,scale=iw/$cols:-2 [vout]";
-  # TODO: filter should be given in a file or fd rather than an arg.
+  # DONE: does the amix filter behave well with exactly one input? Yes, it does.
+  if ($do_audio) {
+    push @filters,
+      "$a_inspec amix=inputs=$naudios:weights=$aweights:duration=longest [aout]";
+  }
+  # xstack can't handle stacking exactly one video.
+  if ($do_video && $nvideos > 1) {
+    push @filters,
+      "$v_inspec xstack=inputs=$nvideos:layout=$layout [vout]";
+  }
+    #$nvideos == 1 ? "$v_inspec scale=iw/$cols:-2 [vout]" :
+    #"$v_inspec xstack=inputs=$nvideos:layout=$layout,scale=iw/$cols:-2 [vout]";
+  # DONE: filter should be given in a file or fd rather than an arg.
+  my @vselect = $do_video ? qw(-map [vout] -codec:v h264) : ();
+  my @aselect = $do_audio ? qw(-map [aout] -ar 48000 -codec:a mp3) : ();
+
+  my $filterfile = File::Temp->new;
+  print $filterfile join(";\n",@filters),"\n";
+  $filterfile->flush;
+
   my @cmdline=(qw(ffmpeg -hide_banner -loglevel warning -accurate_seek -y),
-     @fileargs,"-filter_complex",
-       join(";",@prefilters,$amixfilter,$vmixfilter),
-     qw(-map [vout] -map [aout] -ar 48000 -codec:a mp3 -codec:v h264),@test_args,$outfile);
+     @fileargs,
+     "-filter_complex_script",$filterfile->filename,
+     @vselect,@aselect,
+     #"-filter_complex",join(";",@filters),@vselect,@aselect,
+     @test_args,$outfile);
 
   #print STDERR "CMD: ",join(" ",map "<$_>", @cmdline),"\n";
   do_system(@cmdline);
