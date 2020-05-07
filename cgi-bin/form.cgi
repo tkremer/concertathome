@@ -454,7 +454,14 @@ sub cgi_process_request {
       }
     };
     if ($@) {
-      my $errormsg = $@;
+      # we could do clean errors by appending "\n" everywhere or even using
+      # references, or we can just crudely chop off the debugging information
+      # and neatly put it in an html comment...
+      my @err = split /(?= at )/,$@;
+      my $errorpos = pop @err;
+      my $errormsg = join("",@err);
+
+      # =~ /^(.*)( at .*)$/;
       while (@cleanup) {
         my $file = pop @cleanup;
         if (-f $file) {
@@ -465,7 +472,8 @@ sub cgi_process_request {
       }
       $msg .= "<span style=\"background-color:#ffaaaa\">File ".
                "could not be uploaded. Error: ".
-               escapeHTML($errormsg).".</span><br/>\n";
+               escapeHTML($errormsg).
+               ".<!--".escapeHTML($errorpos)." --></span><br/>\n";
     }
     $msg = "<p style=\"background-color:#ddffdd;\">$msg</p>";
   }
