@@ -309,6 +309,10 @@ sub cgi_process_request {
   my $selflink = $q->script_name."?cfg=".urlescape($cfgname);
   my $cfg = load_json($cfg_file);
   # dies if config not found.
+
+  my $hardened = !(-w $cfg_file || -w $script_filename);
+  # hardened == true iff our script does not have write permission on the config file or the script itself. Consequently we can trust the author of the config file to not specify any unsafe "exec" commandlines.
+
   my $fields = $cfg->{fields}//[];
   die "no fields" unless @$fields;
 
@@ -422,15 +426,15 @@ sub cgi_process_request {
         }
         create_dirlisting($dir,$rec,$templates);
       }
-      if ($cfg->{exec}) {
+      if ($hardened && $cfg->{exec}) {
         die unless ref $cfg->{exec} eq "ARRAY";
         my @args = @{$cfg->{exec}};
         my $cmd = shift @args;
         for (@args) {
           $_ = template_fill($_,\%templdata);
         }
-        # TODO: harden before enabling:
-        #system($cmd,@args);
+        # DONE: harden before enabling:
+        system($cmd,@args);
       }
     };
     if ($@) {
