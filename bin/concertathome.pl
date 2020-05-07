@@ -119,8 +119,10 @@ sub find_claps {
   $args{minlen} //= 0.002;
   $args{maxlen} //= 0.5;
 
+  # we cannot significantly reduce -loglevel here, because the silencedetect
+  # filter works by writing log output.
   my @cmd = (qw(ffmpeg -hide_banner -nostats -nostdin -i),$infile,
-             qw(-af silencedetect=noise=-30dB:duration=0.1 -f null -));
+             qw(-af silencedetect=noise=-25dB:duration=0.1 -f null -));
              #qw(-af silencedetect=noise=-10dB:duration=0.1 -f null -));
 
   my ($c_in,$c_out);
@@ -212,7 +214,7 @@ sub sync_detect {
 sub get_avfile_info {
   my $fname = shift;
   utf8::encode($fname);
-  my @cmd = (qw(ffprobe -loglevel error -hide_banner -show_streams),$fname);
+  my @cmd = (qw(ffprobe -hide_banner -loglevel error -show_streams),$fname);
   open(my $f,"-|",@cmd) or die "cannot exec ffprobe: $!";
   local $_;
   my @streams;
@@ -730,7 +732,7 @@ sub vconductor {
   print $sample_f $buf;
   close($sample_f);
 
-  my @cmdline = (qw(ffmpeg -hide_banner -nostats -nostdin -y -f image2 -r),
+  my @cmdline = (qw(ffmpeg -hide_banner -loglevel error -nostats -nostdin -y -f image2 -r),
                  $framerate,"-i",$frame_links_dir."/%04d.png",
                  qw(-ac 1 -ar),$samplerate,qw(-f s16le -i), $samples_file,
                  qw(-codec:v h264 -codec:a mp3),$outfile);

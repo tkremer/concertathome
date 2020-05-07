@@ -442,7 +442,15 @@ sub cgi_process_request {
           $_ = template_fill($_,\%templdata);
         }
         # DONE: harden before enabling:
-        system($cmd,@args);
+        my $pid = fork;
+        die "cannot fork" if !defined $pid;
+        if ($pid == 0) {
+          open(STDIN,"<","/dev/null") or die "cannot redirect STDIN";
+          open(STDOUT,">&",\*STDERR) or die "cannot redirect STDOUT";
+          exec($cmd,@args) or die "cannot exec: $!";
+        }
+        wait;
+        #waitpid $pid,0;
       }
     };
     if ($@) {
