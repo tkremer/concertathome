@@ -170,7 +170,7 @@ sub lock_new_file {
   my $i = 0;
   my $f;
   while (!sysopen ($f,$name,O_WRONLY|O_CREAT|O_EXCL)) {
-    die "file exists" if $no_rename;
+    die "file already exists" if $no_rename;
     $i++;
     $name = $base."-$i".$ext;
   }
@@ -454,6 +454,7 @@ sub cgi_process_request {
       }
     };
     if ($@) {
+      my $errormsg = $@;
       while (@cleanup) {
         my $file = pop @cleanup;
         if (-f $file) {
@@ -464,7 +465,7 @@ sub cgi_process_request {
       }
       $msg .= "<span style=\"background-color:#ffaaaa\">File ".
                "could not be uploaded. Error: ".
-               escapeHTML($@).".</span><br/>\n";
+               escapeHTML($errormsg).".</span><br/>\n";
     }
     $msg = "<p style=\"background-color:#ddffdd;\">$msg</p>";
   }
